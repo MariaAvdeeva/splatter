@@ -308,7 +308,7 @@ splatSimLibSizes <- function(sim, params) {
 #'
 #' @importFrom SummarizedExperiment rowData rowData<-
 #' @importFrom stats rgamma median
-splatSimGeneMeans <- function(sim, params, baseGeneMeans, copyNumStates, alpha) {
+splatSimGeneMeans <- function(sim, params, baseGeneMeans, copyNumStates, alpha, outliers = NaN) {
 
     nGenes <- getParam(params, "nGenes")
     mean.shape <- getParam(params, "mean.shape")
@@ -333,8 +333,9 @@ splatSimGeneMeans <- function(sim, params, baseGeneMeans, copyNumStates, alpha) 
     }
     
     # Add expression outliers
-    outlier.facs <- getLNormFactors(nGenes, out.prob, 0, out.facLoc,
-                                    out.facScale)
+    if (is.nan(outliers)) {
+        outlier.facs <- getLNormFactors(nGenes, out.prob, 0, out.facLoc,out.facScale)
+    }
     
     median.means.gene <- median(base.means.gene)
     outlier.means <- median.means.gene * outlier.facs
