@@ -136,6 +136,7 @@ splatSimulate <- function(params = newSplatParams(),
                           baseGeneMeans = NULL,
                           copyNumStates = NULL, 
                           alpha = NULL,
+                          outliers = NULL,
                           verbose = TRUE, ...) {
     checkmate::assertClass(params, "SplatParams")
     
@@ -203,7 +204,7 @@ splatSimulate <- function(params = newSplatParams(),
     if (verbose) {message("Simulating library sizes...")}
     sim <- splatSimLibSizes(sim, params)
     if (verbose) {message("Simulating gene means...")}
-    sim <- splatSimGeneMeans(sim, params, baseGeneMeans, copyNumStates, alpha)
+    sim <- splatSimGeneMeans(sim, params, baseGeneMeans = baseGeneMeans, copyNumStates = copyNumStates, alpha = alpha, outliers = outliers)
     if (nBatches > 1) {
         if (verbose) {message("Simulating batch effects...")}
         sim <- splatSimBatchEffects(sim, params)
@@ -308,7 +309,7 @@ splatSimLibSizes <- function(sim, params) {
 #'
 #' @importFrom SummarizedExperiment rowData rowData<-
 #' @importFrom stats rgamma median
-splatSimGeneMeans <- function(sim, params, baseGeneMeans, copyNumStates, alpha, outlier.facs = NaN) {
+splatSimGeneMeans <- function(sim, params, baseGeneMeans, copyNumStates, alpha, outliers = NULL) {
 
     nGenes <- getParam(params, "nGenes")
     mean.shape <- getParam(params, "mean.shape")
@@ -333,8 +334,10 @@ splatSimGeneMeans <- function(sim, params, baseGeneMeans, copyNumStates, alpha, 
     }
     
     # Add expression outliers
-    if (is.nan(outlier.facs)) {
+    if (is.null(outliers)) {
         outlier.facs <- getLNormFactors(nGenes, out.prob, 0, out.facLoc,out.facScale)
+    } else {
+        outlier.facs <- outliers
     }
     
     median.means.gene <- median(base.means.gene)
