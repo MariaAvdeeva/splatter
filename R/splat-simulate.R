@@ -136,6 +136,7 @@ splatSimulate <- function(params = newSplatParams(),
                           baseGeneMeans = NULL,
                           copyNumStates = NULL, 
                           alpha = NULL,
+                          sigma = NULL, 
                           outliers = NULL,
                           verbose = TRUE, ...) {
     checkmate::assertClass(params, "SplatParams")
@@ -204,7 +205,7 @@ splatSimulate <- function(params = newSplatParams(),
     if (verbose) {message("Simulating library sizes...")}
     sim <- splatSimLibSizes(sim, params)
     if (verbose) {message("Simulating gene means...")}
-    sim <- splatSimGeneMeans(sim, params, baseGeneMeans = baseGeneMeans, copyNumStates = copyNumStates, alpha = alpha, outliers = outliers)
+    sim <- splatSimGeneMeans(sim, params, baseGeneMeans = baseGeneMeans, copyNumStates = copyNumStates, alpha = alpha, sigma = sigma, outliers = outliers)
     if (nBatches > 1) {
         if (verbose) {message("Simulating batch effects...")}
         sim <- splatSimBatchEffects(sim, params)
@@ -309,7 +310,7 @@ splatSimLibSizes <- function(sim, params) {
 #'
 #' @importFrom SummarizedExperiment rowData rowData<-
 #' @importFrom stats rgamma median
-splatSimGeneMeans <- function(sim, params, baseGeneMeans, copyNumStates, alpha, outliers = NULL) {
+splatSimGeneMeans <- function(sim, params, baseGeneMeans, copyNumStates, alpha, sigma, outliers = NULL) {
 
     nGenes <- getParam(params, "nGenes")
     mean.shape <- getParam(params, "mean.shape")
@@ -329,7 +330,7 @@ splatSimGeneMeans <- function(sim, params, baseGeneMeans, copyNumStates, alpha, 
         diploid.base.means.gene <- baseGeneMeans  
         
         # Incorporate with gene-specific alpha parameters if simulating with CNVs 
-        alphas <- rnorm(nGenes, mean=alpha, sd=0.1)
+        alphas <- rnorm(nGenes, mean=alpha, sd=sigma)
         base.means.gene <- diploid.base.means.gene*(copyNumStates/2)^alphas
     }
     
