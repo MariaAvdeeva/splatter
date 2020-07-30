@@ -13,7 +13,11 @@ suppressMessages(library(msgr))
 #'        trajectories (eg. differentiation processes).
 #' @param baseGeneMeans vector of previously simulated base gene means (for CNV-simulations)
 #' @param copyNumStates vector of simulated ground truth copy number states (for CNV-simulations).
+#' @param outlierFacs vector of outlier factors from previous simulations (for CNV simulations).
 #' @param alpha double value of alpha parameter (gene-specific expression responses) (for CNV-simulations).
+#' @param groupAssignments vector of previously simulated group assignments for cell-type simulations (for CNV simulations).
+#' @param groupDEFacs list of previously simulated DEGene multiplicative factors for cell-type simulations (for CNV simulations).
+#' @param sortGroups logical. Whether to sort group assignments.
 #' @param verbose logical. Whether to print progress messages.
 #' @param ... any additional parameter settings to override what is provided in
 #'        \code{params}.
@@ -135,9 +139,13 @@ splatSimulate <- function(params = newSplatParams(),
                           method = c("single", "groups", "paths"),
                           baseGeneMeans = NULL,
                           copyNumStates = NULL, 
-                          alpha = NULL,
-                          sigma = NULL, 
-                          outliers = NULL,
+                          outlierFacs = NULL,
+                          alpha = 1.,
+                          sigma = 0.1,
+                          no_bcv = FALSE,
+                          groupAssignments = NULL,
+                          groupDEFacs = NULL,
+                          sortGroups = TRUE,
                           verbose = TRUE, ...) {
     checkmate::assertClass(params, "SplatParams")
     
@@ -197,15 +205,25 @@ splatSimulate <- function(params = newSplatParams(),
     colData(sim)$Batch <- batch.names[batches]
 
     if (method != "single") {
-        groups <- sample(seq_len(nGroups), nCells, prob = group.prob,
-                         replace = TRUE)
-        colData(sim)$Group <- factor(group.names[groups], levels = group.names)
+        if (is.null(groupAssignments)) {
+            groups <- sample(seq_len(nGroups), nCells, prob = group.prob,
+                             replace = TRUE)
+            if (sortGroups) {
+                groups <- sort(groups)
+            }
+            colData(sim)$Group <- factor(group.names[groups], levels = group.names)
+        }
+        else {
+            # label groups based on passed-in assignments
+            colData(sim)$Group <- groupAssignments
+        }
     }
 
     if (verbose) {message("Simulating library sizes...")}
     sim <- splatSimLibSizes(sim, params)
     if (verbose) {message("Simulating gene means...")}
-    sim <- splatSimGeneMeans(sim, params, baseGeneMeans = baseGeneMeans, copyNumStates = copyNumStates, alpha = alpha, sigma = sigma, outliers = outliers)
+    if (verbose && !is.null(copyNumStates)) {message(" -- Simulating gene means with CNVs...")}
+    sim <- splatSimGeneMeans(sim, params, baseGeneMeans, copyNumStates, outlierFacs, alpha, sigma)
     if (nBatches > 1) {
         if (verbose) {message("Simulating batch effects...")}
         sim <- splatSimBatchEffects(sim, params)
@@ -225,7 +243,7 @@ splatSimulate <- function(params = newSplatParams(),
         sim <- splatSimPathCellMeans(sim, params)
     }
     if (verbose) {message("Simulating BCV...")}
-    sim <- splatSimBCVMeans(sim, params)
+    sim <- splatSimBCVMeans(sim, params, no_bcv)
     if (verbose) {message("Simulating counts...")}
     sim <- splatSimTrueCounts(sim, params)
     if (verbose) {message("Simulating dropout (if needed)...")}
@@ -302,15 +320,16 @@ splatSimLibSizes <- function(sim, params) {
 #'
 #' @param sim SingleCellExperiment to add gene means to.
 #' @param params SplatParams object with simulation parameters.
-#' @param baseGeneMeans vector of previously simulated base gene means (for CNV simulations)
-#' @param copyNumStates vector of simulated ground truth copy number states (for CNVs simulations)
-#' @param alpha double value of alpha parameter (gene-specific expression responses) (for CNV-simulations).
+#' @param baseGeneMeans vector of previously simulated base gene means (for CNV simulations).
+#' @param copyNumStates vector of simulated ground truth copy number states (for CNV simulations).
+#' @param outlierFacs vector of outlier factors from previous simulations (for CNV simulations).
+#' @param alpha double value of alpha parameter (gene-specific expression responses) (for CNVsimulations).
 #'
 #' @return SingleCellExperiment with simulated gene means.
 #'
 #' @importFrom SummarizedExperiment rowData rowData<-
 #' @importFrom stats rgamma median
-splatSimGeneMeans <- function(sim, params, baseGeneMeans, copyNumStates, alpha, sigma, outliers = NULL) {
+splatSimGeneMeans <- function(sim, params, baseGeneMeans, copyNumStates, outlierFacs, alpha = 1., sigma = 0.1) {
 
     nGenes <- getParam(params, "nGenes")
     mean.shape <- getParam(params, "mean.shape")
@@ -324,21 +343,22 @@ splatSimGeneMeans <- function(sim, params, baseGeneMeans, copyNumStates, alpha, 
         base.means.gene <- rgamma(nGenes, shape = mean.shape, rate = mean.rate) 
     }
     else {
-        message(" -- Simulating gene means with CNVs...")
-        
         # Use the previous base gene means as the diploid values
         diploid.base.means.gene <- baseGeneMeans  
         
         # Incorporate with gene-specific alpha parameters if simulating with CNVs 
         alphas <- rnorm(nGenes, mean=alpha, sd=sigma)
         base.means.gene <- diploid.base.means.gene*(copyNumStates/2)^alphas
+        base.means.gene[is.na(base.means.gene)] <- 0
+        base.means.gene[is.infinite(base.means.gene)] <- 0
     }
     
     # Add expression outliers
-    if (is.null(outliers)) {
-        outlier.facs <- getLNormFactors(nGenes, out.prob, 0, out.facLoc,out.facScale)
+    # Use previous outliers for simulations within the same cell type
+    if (is.null(outlierFacs)) {
+        outlier.facs <- getLNormFactors(nGenes, out.prob, 0, out.facLoc, out.facScale)
     } else {
-        outlier.facs <- outliers
+        outlier.facs <- outlierFacs
     }
     
     median.means.gene <- median(base.means.gene)
@@ -451,6 +471,7 @@ splatSimBatchCellMeans <- function(sim, params) {
 #'
 #' @param sim SingleCellExperiment to add differential expression to.
 #' @param params splatParams object with simulation parameters.
+#' @param groupDEFacs list of previously simulated DEGene multiplicative factors for cell-type simulations (for CNV simulations).
 #'
 #' @return SingleCellExperiment with simulated differential expression.
 #'
@@ -459,7 +480,7 @@ NULL
 
 #' @rdname splatSimDE
 #' @importFrom SummarizedExperiment rowData
-splatSimGroupDE <- function(sim, params) {
+splatSimGroupDE <- function(sim, params, groupDEFacs) {
 
     nGenes <- getParam(params, "nGenes")
     nGroups <- getParam(params, "nGroups")
@@ -470,8 +491,15 @@ splatSimGroupDE <- function(sim, params) {
     means.gene <- rowData(sim)$GeneMean
 
     for (idx in seq_len(nGroups)) {
-        de.facs <- getLNormFactors(nGenes, de.prob[idx], de.downProb[idx],
-                                   de.facLoc[idx], de.facScale[idx])
+        if (is.null(groupDEFacs)) {
+            de.facs <- getLNormFactors(nGenes, de.prob[idx], de.downProb[idx],
+                                      de.facLoc[idx], de.facScale[idx])
+        }
+        else {
+            # assign previously assigned DE factor
+            de.facs <- groupDEFacs[[idx]]
+        }
+      
         group.means.gene <- means.gene * de.facs
         rowData(sim)[[paste0("DEFacGroup", idx)]] <- de.facs
     }
@@ -699,7 +727,7 @@ splatSimPathCellMeans <- function(sim, params) {
 #'
 #' @importFrom SummarizedExperiment rowData colData assays assays<-
 #' @importFrom stats rchisq rgamma
-splatSimBCVMeans <- function(sim, params) {
+splatSimBCVMeans <- function(sim, params, no_bcv = FALSE) {
 
     cell.names <- colData(sim)$Cell
     gene.names <- rowData(sim)$Gene
@@ -729,7 +757,9 @@ splatSimBCVMeans <- function(sim, params) {
 
     colnames(means.cell) <- cell.names
     rownames(means.cell) <- gene.names
-
+    if (no_bcv) {
+        means.cell <- base.means.cell
+    }
     assays(sim)$BCV <- bcv
     assays(sim)$CellMeans <- means.cell
 
